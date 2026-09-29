@@ -50,6 +50,11 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write("N9 Course Bot is Online 24/7!".encode('utf-8'))
 
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain; charset=utf-8')
+        self.end_headers()
+
     def log_message(self, format, *args):
         return
 
@@ -101,7 +106,7 @@ async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 3. إرسال الإيصال للأدمن مع أزرار القبول/الرفض
     if ADMIN_ID != 0:
         await context.bot.forward_message(chat_id=ADMIN_ID, from_chat_id=update.message.chat_id, message_id=update.message.message_id)
-        
+
         keyboard = [
             [
                 InlineKeyboardButton("✅ تأكيد وإرسال الرابط", callback_data=f"ok:{uid}"),
@@ -109,7 +114,7 @@ async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
+
         await context.bot.send_message(
             chat_id=ADMIN_ID,
             text=f"📄 **إيصال جديد تم رفعه!**\n👤 الاسم: {name}\n🔗 اليوزر: {username}\n🔑 ID: `{uid}`",
@@ -120,7 +125,7 @@ async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def student_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id == ADMIN_ID:
-        return  
+        return
 
     name = user.full_name
     username = f"@{user.username}" if user.username else "بدون يوزر"
@@ -140,7 +145,7 @@ async def student_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
+
     action, uid_str = query.data.split(":")
     uid = int(uid_str)
 
@@ -162,7 +167,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             status = "❌ *تم الرفض وإبلاغ الطالب*"
             await archive_to_db(uid, "System", "", "status", "تم رفض الإيصال")
-            
+
     except Exception:
         status = "⚠️ *حدث خطأ! (ربما قام الطالب بحظر البوت)*"
 
@@ -172,15 +177,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    
+
     replied_msg = update.message.reply_to_message
     src = replied_msg.text or replied_msg.caption or ""
-    
+
     found = re.search(r"ID: `?(\d+)`?", src)
     if not found:
         await update.message.reply_text("⚠️ اعمل (Reply) على الرسالة التي تحتوي على ID الطالب.")
         return
-        
+
     uid = int(found.group(1))
 
     try:
@@ -189,7 +194,7 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await context.bot.send_message(chat_id=uid, text="📩 **مرفق من الإدارة:**", parse_mode="Markdown")
             await context.bot.copy_message(chat_id=uid, from_chat_id=update.message.chat_id, message_id=update.message.message_id)
-        
+
         await update.message.reply_text("✅ **تم إرسال ردك للطالب بنجاح.**", parse_mode="Markdown")
     except Exception:
         await update.message.reply_text("❌ **فشل الإرسال.** ربما الطالب حظر البوت.")
