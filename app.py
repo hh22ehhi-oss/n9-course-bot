@@ -5,11 +5,13 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.helpers import escape_markdown
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
+    ChatJoinRequestHandler,
     ContextTypes,
     filters,
 )
@@ -21,7 +23,7 @@ ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 COURSE_LINK = os.environ.get("COURSE_LINK", "")
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://ixcwpmpxjvyvqeijikdr.supabase.co")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "sb_publishable_1aqoYoCUhS8JLrKw-nXlsQ_CEMwErZ2")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -41,6 +43,23 @@ WELCOME = """أهلاً بك في بوت N9
 في حال مواجهة أي مشكلة في التحويل أو بخصوص الدورة يمكنك الإرسال هنا وسيتم الرد عليك.
 
 شكراً لكم 🤍"""
+
+
+def course_message_text():
+    return f"✅ **تم التأكد من التحويل بنجاح!**\n\nتفضل رابط الدخول للدورة:\n{COURSE_LINK}\n\nمرحباً بك 🌟"
+
+
+def md(text) -> str:
+    # يمنع أخطاء Markdown لما الاسم أو الرسالة فيها _ أو * أو `
+    return escape_markdown(str(text or ""), version=1)
+
+
+def is_admin(update: Update) -> bool:
+    # يشتغل سواء ADMIN_ID حسابك أو ID قروب الإدارة
+    user_ok = update.effective_user is not None and update.effective_user.id == ADMIN_ID
+    chat_ok = update.effective_chat is not None and update.effective_chat.id == ADMIN_ID
+    return user_ok or chat_ok
+
 
 # ==================== سيرفر 24/7 لـ Render ====================
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -81,6 +100,31 @@ def _archive_message_sync(user_id, full_name, username, msg_type, content):
 async def archive_to_db(user_id, full_name, username, msg_type, content):
     await asyncio.to_thread(_archive_message_sync, user_id, full_name, username, msg_type, content)
 
+
+# ---------- الطلاب المقبولين (مسموح لهم يدخلون القروب) ----------
+def _save_approved_sync(user_id):
+    supabase.table("approved_users").upsert({"user_id": user_id}).execute()
+
+async def save_approved(user_id) -> bool:
+    try:
+        await asyncio.to_thread(_save_approved_sync, user_id)
+        return True
+    except Exception as e:
+        print(f"Error saving approved user: {e}")
+        return False
+
+def _is_approved_sync(user_id):
+    res = supabase.table("approved_users").select("user_id").eq("user_id", user_id).execute()
+    return bool(res.data)
+
+async def is_approved(user_id) -> bool:
+    try:
+        return await asyncio.to_thread(_is_approved_sync, user_id)
+    except Exception as e:
+        # أي خطأ = ما نقبل تلقائي (أمان)
+        print(f"Error checking approved user: {e}")
+        return False
+
 # ==================== المعالجات (Handlers) ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -117,7 +161,7 @@ async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await context.bot.send_message(
             chat_id=ADMIN_ID,
-            text=f"📄 **إيصال جديد تم رفعه!**\n👤 الاسم: {name}\n🔗 اليوزر: {username}\n🔑 ID: `{uid}`",
+            text=f"📄 **إيصال جديد تم رفعه!**\n👤 الاسم: {md(name)}\n🔗 اليوزر: {md(username)}\n🔑 ID: `{uid}`",
             reply_markup=reply_markup,
             parse_mode="Markdown"
         )
@@ -138,7 +182,7 @@ async def student_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ADMIN_ID != 0:
         await context.bot.send_message(
             chat_id=ADMIN_ID,
-            text=f"💬 **رسالة من الطالب:**\n👤 الاسم: {name} ({username})\n🔑 ID: `{user.id}`\n\nالرسالة:\n{text}",
+            text=f"💬 **رسالة من الطالب:**\n👤 الاسم: {md(name)} ({md(username)})\n🔑 ID: `{user.id}`\n\nالرسالة:\n{md(text)}",
             parse_mode="Markdown"
         )
 
@@ -153,11 +197,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if action == "ok":
             await context.bot.send_message(
                 chat_id=uid,
-                text=f"✅ **تم التأكد من التحويل بنجاح!**\n\nتفضل رابط الدخول للدورة:\n{COURSE_LINK}\n\nمرحباً بك 🌟",
+                text=course_message_text(),
                 parse_mode="Markdown",
                 disable_web_page_preview=True
             )
-            status = "✅ *تم قبول الطالب وإرسال الرابط*"
+            # التسجيل يصير بس بعد ما الرسالة توصل
+            if await save_approved(uid):
+                status = "✅ *تم قبول الطالب وإرسال الرابط*"
+            else:
+                status = "⚠️ *انرسل الرابط بس ما تسجّل الطالب، اقبل طلبه يدوي*"
             await archive_to_db(uid, "System", "", "status", "تم قبول الاشتراك")
         else:
             await context.bot.send_message(
@@ -171,7 +219,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         status = "⚠️ *حدث خطأ! (ربما قام الطالب بحظر البوت)*"
 
-    original_text = query.message.text or "طلب اشتراك"
+    original_text = md(query.message.text or "طلب اشتراك")
     await query.edit_message_text(text=f"{original_text}\n\n{status}", parse_mode="Markdown")
 
 async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -190,7 +238,7 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         if update.message.text:
-            await context.bot.send_message(chat_id=uid, text=f"📩 **رد من الإدارة:**\n\n{update.message.text}", parse_mode="Markdown")
+            await context.bot.send_message(chat_id=uid, text=f"📩 **رد من الإدارة:**\n\n{md(update.message.text)}", parse_mode="Markdown")
         else:
             await context.bot.send_message(chat_id=uid, text="📩 **مرفق من الإدارة:**", parse_mode="Markdown")
             await context.bot.copy_message(chat_id=uid, from_chat_id=update.message.chat_id, message_id=update.message.message_id)
@@ -199,18 +247,98 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         await update.message.reply_text("❌ **فشل الإرسال.** ربما الطالب حظر البوت.")
 
+
+# ==================== قبول يدوي بأمر /approve ====================
+async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        return
+
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text("اكتب: /approve ID\nمثال: /approve 2012574372")
+        return
+
+    uid = int(context.args[0])
+
+    # 1. إرسال رسالة الرابط للطالب
+    try:
+        await context.bot.send_message(
+            chat_id=uid,
+            text=course_message_text(),
+            parse_mode="Markdown",
+            disable_web_page_preview=True
+        )
+    except Exception:
+        await update.message.reply_text("❌ ما قدرت أرسل له. ممكن ما ضغط Start في البوت أو حاظره.")
+        return
+
+    # 2. تسجيله في المقبولين
+    if not await save_approved(uid):
+        await update.message.reply_text("⚠️ انرسل الرابط بس ما تسجّل، اقبل طلبه يدوي.")
+        return
+
+    await archive_to_db(uid, "System", "", "status", "تم قبول الاشتراك (يدوي)")
+
+    # 3. لو عنده طلب انضمام معلّق، نقبله على طول
+    pending = context.bot_data.get("pending_requests", {})
+    group_id = pending.pop(uid, None)
+    if group_id:
+        try:
+            await context.bot.approve_chat_join_request(chat_id=group_id, user_id=uid)
+            await update.message.reply_text(f"✅ انرسل الرابط وتسجّل {uid} ودخل القروب")
+            return
+        except Exception:
+            pass
+
+    await update.message.reply_text(f"✅ انرسل الرابط وتسجّل {uid}")
+
+
+# ==================== طلبات الانضمام للقروب ====================
+async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    req = update.chat_join_request
+    user = req.from_user
+    username = f"@{user.username}" if user.username else "بدون يوزر"
+
+    if await is_approved(user.id):
+        try:
+            await req.approve()
+            await archive_to_db(user.id, user.full_name, user.username, "status", "دخل القروب")
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"✅ دخل القروب: {user.full_name} ({username})\n🔑 ID: {user.id}"
+            )
+        except Exception as e:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"⚠️ ما قدرت أقبل {user.full_name} (ID: {user.id})\nالسبب: {e}"
+            )
+    else:
+        # نحفظ الطلب عشان لو سويت /approve يدخل على طول
+        context.bot_data.setdefault("pending_requests", {})[user.id] = req.chat.id
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=(
+                f"⚠️ طلب انضمام من شخص غير مسجّل:\n"
+                f"👤 {user.full_name} ({username})\n"
+                f"🔑 ID: {user.id}\n\n"
+                f"لو دافع اكتب:\n/approve {user.id}"
+            )
+        )
+
+
 # ==================== التشغيل ====================
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("approve", approve_cmd))
+    app.add_handler(ChatJoinRequestHandler(handle_join_request))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, handle_receipt))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND) & (~filters.User(ADMIN_ID)), student_text))
     app.add_handler(MessageHandler(filters.REPLY & filters.User(ADMIN_ID), admin_reply))
     app.add_handler(CallbackQueryHandler(button_callback, pattern="^(ok|no):"))
 
     print("Course Bot with Full Supabase Archiving is Running...")
-    app.run_polling()
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
