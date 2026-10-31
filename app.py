@@ -25,10 +25,10 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "sb_publishable_1aqoYoCUhS8JLrKw-n
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-WELCOME = """أهلاً بك في بوت N9 🎓
+WELCOME = """أهلاً بك في بوت N9 
 للاشتراك في دورة الفاينل انجليزي
 
-المبلغ: 89 ريال للميد. لتفاصيل أكثر عن الدورة: https://t.me/EngN927/453
+المبلغ: 89 ريال للميد. لتفاصيل أكثر عن الدورة: https://t.me/EngN927/923
 
 💳 **طريقة التسجيل:**
 التحويل على الحساب التالي (urpay / الراجحي):
