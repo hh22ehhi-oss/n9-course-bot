@@ -329,12 +329,15 @@ async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("approve", approve_cmd))
     app.add_handler(ChatJoinRequestHandler(handle_join_request))
-    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, handle_receipt))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND) & (~filters.User(ADMIN_ID)), student_text))
-    app.add_handler(MessageHandler(filters.REPLY & filters.User(ADMIN_ID), admin_reply))
+    # الطلاب: بس في الخاص (عشان البوت ما يرد على أحد داخل قروب الدورة)
+    private = filters.ChatType.PRIVATE
+    admin_chat = private | filters.Chat(ADMIN_ID)
+    app.add_handler(MessageHandler((filters.PHOTO | filters.Document.ALL) & private & (~filters.User(ADMIN_ID)), handle_receipt))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND) & private & (~filters.User(ADMIN_ID)), student_text))
+    app.add_handler(MessageHandler(filters.REPLY & filters.User(ADMIN_ID) & admin_chat, admin_reply))
     app.add_handler(CallbackQueryHandler(button_callback, pattern="^(ok|no):"))
 
     print("Course Bot with Full Supabase Archiving is Running...")
